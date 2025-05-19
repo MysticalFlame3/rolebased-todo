@@ -1,5 +1,6 @@
 package com.todoapp.todolist.model;
 
+import com.todoapp.todolist.entity.UserEntity;
 import jakarta.persistence.*;
 import java.time.LocalDate;
 
@@ -40,4 +41,17 @@ public class Task {
     public LocalDate getCompletionDate() { return completionDate; }
 
     public void setCompletionDate(LocalDate completionDate) { this.completionDate = completionDate; }
+
+    @ManyToOne
+    @JoinColumn(name = "user_id")
+    private UserEntity user;
+
+    public void setUser(UserEntity user) {
+        this.user = user;
+    }
+
+    public UserEntity getUser() {
+        return user;
+    }
+
 }

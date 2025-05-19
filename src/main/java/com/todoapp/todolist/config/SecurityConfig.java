@@ -1,32 +1,43 @@
 package com.todoapp.todolist.config;
 
-import org.springframework.context.annotation.Bean;
-import org.springframework.context.annotation.Configuration;
+import com.todoapp.todolist.entity.UserEntity;
+import com.todoapp.todolist.repository.UserRepository;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.*;
 import org.springframework.http.HttpMethod;
+import org.springframework.security.authentication.AuthenticationManager;
+import org.springframework.security.config.annotation.authentication.configuration.AuthenticationConfiguration;
+import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
-import org.springframework.security.core.userdetails.User;
-import org.springframework.security.core.userdetails.UserDetails;
-import org.springframework.security.provisioning.InMemoryUserDetailsManager;
+import org.springframework.security.core.userdetails.*;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.security.provisioning.InMemoryUserDetailsManager;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 
-import static org.springframework.security.config.Customizer.withDefaults;
+import java.util.*;
 
 @Configuration
 @EnableWebSecurity
+@EnableMethodSecurity
 public class SecurityConfig {
 
-    // Password encoder bean
+    @Autowired
+    private UserRepository userRepository;
+
     @Bean
     public PasswordEncoder passwordEncoder() {
         return new BCryptPasswordEncoder();
     }
 
-    // In-memory users for authentication
+    // Unified UserDetailsService for in-memory + DB
     @Bean
-    public InMemoryUserDetailsManager userDetailsService() {
+    public UserDetailsService userDetailsService() {
+        InMemoryUserDetailsManager inMemoryManager = new InMemoryUserDetailsManager();
+
+        // In-memory admin and user1
         UserDetails admin = User.withUsername("admin")
                 .password(passwordEncoder().encode("adminpass"))
                 .roles("ADMIN")
@@ -37,29 +48,56 @@ public class SecurityConfig {
                 .roles("USER")
                 .build();
 
-        UserDetails user2 = User.withUsername("user2")
-                .password(passwordEncoder().encode("userpass2"))
-                .roles("USER")
-                .build();
+        inMemoryManager.createUser(admin);
+        inMemoryManager.createUser(user1);
 
-        return new InMemoryUserDetailsManager(admin, user1, user2);
+        return username -> {
+            // Try DB user first
+            UserEntity dbUser = userRepository.findByUsername(username);
+            if (dbUser != null) {
+                return new org.springframework.security.core.userdetails.User(
+                        dbUser.getUsername(),
+                        dbUser.getPassword(),
+                        Collections.singletonList(new SimpleGrantedAuthority("ROLE_" + dbUser.getRole()))
+                );
+            }
+
+            // Fall back to in-memory
+            return inMemoryManager.loadUserByUsername(username);
+        };
     }
 
-    // Security filter chain configuration
+    // Define the SecurityFilterChain
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
         http
-                .csrf(csrf -> csrf.disable())  // Disable CSRF (enable in production with proper CSRF handling)
+                .csrf(csrf -> csrf.disable())
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers(HttpMethod.POST, "/api/tasks/**").hasRole("ADMIN")
                         .requestMatchers(HttpMethod.PUT, "/api/tasks/**").hasRole("ADMIN")
                         .requestMatchers(HttpMethod.DELETE, "/api/tasks/**").hasRole("ADMIN")
-                        .requestMatchers(HttpMethod.PATCH, "/api/tasks/**/complete").hasAnyRole("USER", "ADMIN")
+                        .requestMatchers(HttpMethod.PATCH, "/api/tasks/*/complete").hasAnyRole("USER", "ADMIN")
                         .requestMatchers(HttpMethod.GET, "/api/tasks/**").authenticated()
+                        .requestMatchers("/dashboard").authenticated()
                         .anyRequest().permitAll()
                 )
-                .httpBasic(withDefaults());  // Enable HTTP Basic authentication
+                .formLogin(form -> form
+                        .loginPage("/login")
+                        .defaultSuccessUrl("/dashboard", true)
+                        .permitAll()
+                )
+                .logout(logout -> logout
+                        .logoutSuccessUrl("/login")
+                        .permitAll()
+                )
+                .httpBasic();
 
         return http.build();
+    }
+
+    // Authentication manager bean
+    @Bean
+    public AuthenticationManager authenticationManager(AuthenticationConfiguration config) throws Exception {
+        return config.getAuthenticationManager();
     }
 }
